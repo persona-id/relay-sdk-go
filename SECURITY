@@ -1,0 +1,19 @@
+When submitting a report, please include as much information as possible, such as:
+
+- A description of the vulnerability
+- Steps to reproduce the issue
+- The affected version(s)
+- Any proof-of-concept code or screenshots, if applicable
+- Your assessment of the potential impact
+
+Please **do not disclose security vulnerabilities publicly** (including via GitHub Issues, Discussions, or pull requests) until we have had an opportunity to investigate and address the issue.
+
+### What to Expect
+
+- We will acknowledge receipt of your report as soon as reasonably possible.
+- We will investigate the issue and work with you to understand and validate the report.
+- If the report is confirmed, we will prioritize remediation based on severity and coordinate responsible disclosure where appropriate.
+- Eligible reports may qualify for a reward through Persona's bug bounty program. Reward eligibility and payout amounts are determined based on factors such as the severity, impact, quality, and originality of the report, and are subject to the terms of the program.
+- If the report is determined not to be a security vulnerability, we will let you know and provide additional context when possible.
+
+We appreciate the efforts of the security community in helping keep our users and systems safe.
