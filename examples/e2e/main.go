@@ -7,10 +7,9 @@
 //
 // Optional environment variables:
 //
-//		PERSONA_CLAIM_TYPE  claim type to request (default "live_human_presence")
-//		PERSONA_DOMAIN      Persona domain (default "withpersona.com").
-//	                     The API base becomes "https://api.<domain>"
-//		                    and the hosted relay flow becomes "https://relay.<domain>/relay".
+//	PERSONA_CLAIM_TYPE       claim type to request (default "live_human_presence")
+//	PERSONA_API_BASE_URL     where to make SDK calls (default "https://api.withpersona.com")
+//	PERSONA_HOSTED_BASE_URL  where to open the browser flow (default "https://relay.withpersona.com/relay")
 package main
 
 import (
@@ -26,7 +25,10 @@ import (
 	persona "github.com/persona-id/relay-sdk-go"
 )
 
-const defaultDomain = "withpersona.com"
+const (
+	defaultAPIBaseURL    = "https://api.withpersona.com"
+	defaultHostedBaseURL = "https://relay.withpersona.com/relay"
+)
 
 func main() {
 	apiKey := os.Getenv("PERSONA_API_KEY")
@@ -39,22 +41,31 @@ func main() {
 		claimType = "live_human_presence"
 	}
 
-	domain := os.Getenv("PERSONA_DOMAIN")
-	if domain == "" {
-		domain = defaultDomain
+	apiBaseURL := os.Getenv("PERSONA_API_BASE_URL")
+	if apiBaseURL == "" {
+		apiBaseURL = defaultAPIBaseURL
+	}
+
+	hostedBaseURL := os.Getenv("PERSONA_HOSTED_BASE_URL")
+	if hostedBaseURL == "" {
+		hostedBaseURL = defaultHostedBaseURL
 	}
 
 	client := persona.New(persona.Options{
 		APIKey:  apiKey,
-		BaseURL: fmt.Sprintf("https://api.%s", domain),
+		BaseURL: apiBaseURL,
 	})
 
-	hostedBaseURL := fmt.Sprintf("https://relay.%s/relay", domain)
+	fmt.Printf("api base:    %s\n", apiBaseURL)
+	fmt.Printf("hosted base: %s\n", hostedBaseURL)
+	fmt.Println()
 
 	ctx := context.Background()
 
 	// 1. Create a relay session.
-	relay, err := client.Relays.Create(ctx, persona.CreateRelayParams{ClaimType: claimType})
+	relay, err := client.Relays.Create(ctx, persona.CreateRelayParams{
+		ClaimType: claimType,
+	})
 	if err != nil {
 		log.Fatalf("create: %v", err)
 	}
@@ -77,7 +88,9 @@ func main() {
 	fmt.Println()
 
 	// 3. Issue a Privacy Pass token via the blind RSA flow.
-	issued, err := client.Relays.IssuePrivacyPass(ctx, persona.IssuePrivacyPassParams{ClaimType: claimType})
+	issued, err := client.Relays.IssuePrivacyPass(ctx, persona.IssuePrivacyPassParams{
+		ClaimType: claimType,
+	})
 	if err != nil {
 		log.Fatalf("issue: %v", err)
 	}

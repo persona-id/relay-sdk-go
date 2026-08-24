@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"strings"
 )
 
 const maxRetries = 3
+const sandboxAPIKeyPrefix = "persona_sandbox_"
 
 var defaultRetryStatuses = map[HTTPStatusCode]bool{
 	StatusRateLimited:         true,
@@ -42,14 +44,16 @@ type generateClaimAPIResponse struct {
 }
 
 type personaAPI struct {
-	client *client
-	apiKey string
+	client  *client
+	apiKey  string
+	sandbox bool
 }
 
 func newPersonaAPI(opts Options) *personaAPI {
 	return &personaAPI{
-		client: newClient(opts.BaseURL, resolveHTTPClient(opts.HTTPClient)),
-		apiKey: opts.APIKey,
+		client:  newClient(opts.BaseURL, resolveHTTPClient(opts.HTTPClient)),
+		apiKey:  opts.APIKey,
+		sandbox: strings.HasPrefix(opts.APIKey, sandboxAPIKeyPrefix),
 	}
 }
 
@@ -57,6 +61,9 @@ func (a *personaAPI) createRelay(ctx context.Context, claimType string, encrypti
 	return withRetries(ctx, retryOptions{maxRetries: maxRetries, shouldRetry: defaultShouldRetry}, func() (*createRelayAPIResponse, error) {
 		var resp createRelayAPIResponse
 		body := map[string]any{"claimType": claimType, "encryptionKeyPem": encryptionKeyPEM}
+		if a.sandbox {
+			body["sandbox"] = true
+		}
 		if err := a.client.post(ctx, "/api/privacy/v1/relays", body, nil, &resp); err != nil {
 			return nil, err
 		}
@@ -68,6 +75,9 @@ func (a *personaAPI) getChallenge(ctx context.Context, claimType string) (*chall
 	return withRetries(ctx, retryOptions{maxRetries: maxRetries, shouldRetry: defaultShouldRetry}, func() (*challengeAPIResponse, error) {
 		var resp challengeAPIResponse
 		body := map[string]any{"claimType": claimType}
+		if a.sandbox {
+			body["sandbox"] = true
+		}
 		if err := a.client.post(ctx, "/api/privacy/v1/relays/challenge", body, nil, &resp); err != nil {
 			return nil, err
 		}

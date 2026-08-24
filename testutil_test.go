@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	testAPIKey      = "persona_api_key"
-	testRelayToken  = "relay_token_abc123"
-	testRelaySecret = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
-	testTokenKeyID  = "abc123"
+	testAPIKey        = "persona_production_api_key"
+	testSandboxAPIKey = "persona_sandbox_api_key"
+	testRelayToken    = "relay_token_abc123"
+	testRelaySecret   = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+	testTokenKeyID    = "abc123"
 )
 
 type capturedRequest struct {

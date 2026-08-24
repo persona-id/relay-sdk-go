@@ -13,7 +13,8 @@ func Example() {
 	client := persona.New(persona.Options{APIKey: "<YOUR_API_KEY>"})
 
 	relay, err := client.Relays.Create(ctx, persona.CreateRelayParams{
-		ClaimType: "live_human_presence",
+		ClaimType:        "live_human_presence",
+		EncryptionKeyPEM: nil,
 	})
 	if err != nil {
 		log.Fatal(err)

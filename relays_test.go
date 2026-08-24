@@ -90,6 +90,26 @@ func TestCreateForwardsClaimTypeAndNullEncryptionKey(t *testing.T) {
 	if v, ok := body["encryptionKeyPem"]; !ok || v != nil {
 		t.Errorf("expected encryptionKeyPem null, got %v (present=%v)", v, ok)
 	}
+	if v, ok := body["sandbox"]; ok {
+		t.Errorf("expected sandbox omitted, got %v", v)
+	}
+}
+
+func TestCreateEnablesSandboxForSandboxAPIKey(t *testing.T) {
+	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, createRelayBody)
+	})
+
+	client := New(Options{APIKey: testSandboxAPIKey, BaseURL: m.server.URL})
+	if _, err := client.Relays.Create(context.Background(), defaultCreateParams()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var body map[string]any
+	_ = json.Unmarshal(m.calls()[0].Body, &body)
+	if body["sandbox"] != true {
+		t.Errorf("expected sandbox true, got %v", body["sandbox"])
+	}
 }
 
 func TestCreateForwardsEncryptionKeyWhenProvided(t *testing.T) {
@@ -226,6 +246,29 @@ func TestIssuePrivacyPassChallengeCallShape(t *testing.T) {
 	if auth := challenge.Header.Get("Authorization"); auth != "" {
 		t.Errorf("expected no auth header on challenge, got %q", auth)
 	}
+	if v, ok := body["sandbox"]; ok {
+		t.Errorf("expected sandbox omitted from challenge body, got %v", v)
+	}
+}
+
+func TestIssuePrivacyPassEnablesSandboxForSandboxAPIKey(t *testing.T) {
+	m := newMockPersona(t, issuanceHandler(t))
+	client := New(Options{APIKey: testSandboxAPIKey, BaseURL: m.server.URL})
+	params := IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"}
+	if _, err := client.Relays.IssuePrivacyPass(context.Background(), params); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	challenge := findCall(m.calls(), "/challenge")
+	if challenge == nil {
+		t.Fatal("expected a challenge call")
+	}
+	var body map[string]any
+	_ = json.Unmarshal(challenge.Body, &body)
+	if body["sandbox"] != true {
+		t.Errorf("expected sandbox true, got %v", body["sandbox"])
+	}
+
 }
 
 func TestIssuePrivacyPassPrivacyPassesAuth(t *testing.T) {
@@ -248,6 +291,9 @@ func TestIssuePrivacyPassPrivacyPassesAuth(t *testing.T) {
 	_ = json.Unmarshal(call.Body, &body)
 	if _, ok := body["relayToken"]; ok {
 		t.Error("expected no relayToken in privacy-passes body")
+	}
+	if _, ok := body["sandbox"]; ok {
+		t.Error("expected no sandbox in privacy-passes body")
 	}
 }
 
