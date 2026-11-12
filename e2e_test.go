@@ -44,7 +44,7 @@ func TestFullPrivacyPassFlow(t *testing.T) {
 	persona := m.client()
 
 	// Step 1: create a relay session.
-	relay, err := persona.Relays.Create(ctx, CreateRelayParams{ClaimType: "age_over18_united_kingdom"})
+	relay, err := persona.Relays.Create(ctx, testClaimType, nil)
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestFullPrivacyPassFlow(t *testing.T) {
 	}
 
 	// Step 2: issue a Privacy Pass token via the blind RSA flow.
-	issue, err := persona.Relays.IssuePrivacyPass(ctx, IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+	issue, err := persona.Relays.IssuePrivacyPass(ctx, testClaimType)
 	if err != nil {
 		t.Fatalf("issue failed: %v", err)
 	}
@@ -85,11 +85,7 @@ func TestFullPrivacyPassFlow(t *testing.T) {
 	}
 
 	// Step 3: redeem the Privacy Pass token for a claim.
-	claim, err := persona.Relays.GenerateClaim(ctx, GenerateClaimParams{
-		PrivacyPassToken: issue.PrivacyPassToken,
-		RelayToken:       relay.RelayToken,
-		RelaySecret:      relay.RelaySecret,
-	})
+	claim, err := persona.Relays.GenerateClaim(ctx, issue.PrivacyPassToken, relay.RelayToken, relay.RelaySecret)
 	if err != nil {
 		t.Fatalf("generate claim failed: %v", err)
 	}

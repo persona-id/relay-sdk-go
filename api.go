@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const personaAPIVersion = "2026-09-29"
+
 const maxRetries = 3
 const sandboxAPIKeyPrefix = "persona_sandbox_"
 
@@ -57,14 +59,18 @@ func newPersonaAPI(opts Options) *personaAPI {
 	}
 }
 
-func (a *personaAPI) createRelay(ctx context.Context, claimType string, encryptionKeyPEM *string) (*createRelayAPIResponse, error) {
+func versionHeaders() map[string]string {
+	return map[string]string{"Persona-Version": personaAPIVersion}
+}
+
+func (a *personaAPI) createRelay(ctx context.Context, claimType string, encryptionKeyJWK *EncryptionJWK) (*createRelayAPIResponse, error) {
 	return withRetries(ctx, retryOptions{maxRetries: maxRetries, shouldRetry: defaultShouldRetry}, func() (*createRelayAPIResponse, error) {
 		var resp createRelayAPIResponse
-		body := map[string]any{"claimType": claimType, "encryptionKeyPem": encryptionKeyPEM}
+		body := map[string]any{"claimType": claimType, "encryptionKeyJwk": encryptionKeyJWK}
 		if a.sandbox {
 			body["sandbox"] = true
 		}
-		if err := a.client.post(ctx, "/api/privacy/v1/relays", body, nil, &resp); err != nil {
+		if err := a.client.post(ctx, "/api/privacy/v1/relays", body, versionHeaders(), &resp); err != nil {
 			return nil, err
 		}
 		return &resp, nil
@@ -78,7 +84,7 @@ func (a *personaAPI) getChallenge(ctx context.Context, claimType string) (*chall
 		if a.sandbox {
 			body["sandbox"] = true
 		}
-		if err := a.client.post(ctx, "/api/privacy/v1/relays/challenge", body, nil, &resp); err != nil {
+		if err := a.client.post(ctx, "/api/privacy/v1/relays/challenge", body, versionHeaders(), &resp); err != nil {
 			return nil, err
 		}
 		return &resp, nil
@@ -89,7 +95,7 @@ func (a *personaAPI) issuePrivacyPass(ctx context.Context, blindedToken, keyID s
 	return withRetries(ctx, retryOptions{maxRetries: maxRetries, shouldRetry: defaultShouldRetry}, func() (*issuePrivacyPassAPIResponse, error) {
 		var resp issuePrivacyPassAPIResponse
 		body := map[string]any{"blindedToken": blindedToken, "keyId": keyID}
-		headers := map[string]string{"Authorization": "Bearer " + a.apiKey}
+		headers := map[string]string{"Authorization": "Bearer " + a.apiKey, "Persona-Version": personaAPIVersion}
 		if err := a.client.post(ctx, "/api/v1/privacy-passes", body, headers, &resp); err != nil {
 			return nil, err
 		}
@@ -113,6 +119,7 @@ func (a *personaAPI) redeemRelay(ctx context.Context, relayToken, privacyPassTok
 			"Authorization":        "PrivateToken token=" + privacyPassToken,
 			"Persona-Relay-Secret": relaySecret,
 			"Idempotency-Key":      idempotencyKey,
+			"Persona-Version":      personaAPIVersion,
 		}
 		path := fmt.Sprintf("/api/privacy/v1/relays/%s/generate-claim", relayToken)
 		if err := a.client.post(ctx, path, map[string]any{}, headers, &resp); err != nil {

@@ -2,9 +2,12 @@ package persona
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strings"
@@ -19,9 +22,7 @@ var createRelayBody = map[string]any{
 	"relay-session-access-token": "jwt.session.token",
 }
 
-func defaultCreateParams() CreateRelayParams {
-	return CreateRelayParams{ClaimType: "age_over18_united_kingdom", EncryptionKeyPEM: nil}
-}
+const testClaimType = "age_over18_united_kingdom"
 
 // ── Persona client configuration ────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ func TestBaseURLOverride(t *testing.T) {
 		writeJSON(w, createRelayBody)
 	})
 
-	_, err := m.client().Relays.Create(context.Background(), defaultCreateParams())
+	_, err := m.client().Relays.Create(context.Background(), testClaimType, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestCreateReturnsTokens(t *testing.T) {
 		writeJSON(w, createRelayBody)
 	})
 
-	res, err := m.client().Relays.Create(context.Background(), defaultCreateParams())
+	res, err := m.client().Relays.Create(context.Background(), testClaimType, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestCreateSendsNoAuthHeaderWithoutAPIKey(t *testing.T) {
 	})
 
 	persona := New(Options{BaseURL: m.server.URL}) // no API key
-	if _, err := persona.Relays.Create(context.Background(), defaultCreateParams()); err != nil {
+	if _, err := persona.Relays.Create(context.Background(), testClaimType, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if auth := m.calls()[0].Header.Get("Authorization"); auth != "" {
@@ -71,12 +72,12 @@ func TestCreateSendsNoAuthHeaderWithoutAPIKey(t *testing.T) {
 	}
 }
 
-func TestCreateForwardsClaimTypeAndNullEncryptionKey(t *testing.T) {
+func TestCreateForwardsClaimTypeAndNullEncryptionJWK(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, createRelayBody)
 	})
 
-	if _, err := m.client().Relays.Create(context.Background(), defaultCreateParams()); err != nil {
+	if _, err := m.client().Relays.Create(context.Background(), testClaimType, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -87,8 +88,11 @@ func TestCreateForwardsClaimTypeAndNullEncryptionKey(t *testing.T) {
 	if body["claimType"] != "age_over18_united_kingdom" {
 		t.Errorf("expected claimType forwarded, got %v", body["claimType"])
 	}
-	if v, ok := body["encryptionKeyPem"]; !ok || v != nil {
-		t.Errorf("expected encryptionKeyPem null, got %v (present=%v)", v, ok)
+	if v, ok := body["encryptionKeyJwk"]; !ok || v != nil {
+		t.Errorf("expected encryptionKeyJwk null, got %v (present=%v)", v, ok)
+	}
+	if v, ok := body["encryptionKeyPem"]; ok {
+		t.Errorf("expected encryptionKeyPem omitted, got %v", v)
 	}
 	if v, ok := body["sandbox"]; ok {
 		t.Errorf("expected sandbox omitted, got %v", v)
@@ -101,7 +105,7 @@ func TestCreateEnablesSandboxForSandboxAPIKey(t *testing.T) {
 	})
 
 	client := New(Options{APIKey: testSandboxAPIKey, BaseURL: m.server.URL})
-	if _, err := client.Relays.Create(context.Background(), defaultCreateParams()); err != nil {
+	if _, err := client.Relays.Create(context.Background(), testClaimType, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -112,22 +116,47 @@ func TestCreateEnablesSandboxForSandboxAPIKey(t *testing.T) {
 	}
 }
 
-func TestCreateForwardsEncryptionKeyWhenProvided(t *testing.T) {
+func TestCreateForwardsEncryptionJWK(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, createRelayBody)
 	})
 
-	pem := "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\n-----END PUBLIC KEY-----\n"
-	params := defaultCreateParams()
-	params.EncryptionKeyPEM = ptr(pem)
-	if _, err := m.client().Relays.Create(context.Background(), params); err != nil {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	if _, err := m.client().Relays.Create(context.Background(), testClaimType, NewEncryptionJWK(&key.PublicKey)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	var body map[string]any
 	_ = json.Unmarshal(m.calls()[0].Body, &body)
-	if body["encryptionKeyPem"] != pem {
-		t.Errorf("expected encryptionKeyPem forwarded, got %v", body["encryptionKeyPem"])
+	if _, ok := body["encryptionKeyPem"]; ok {
+		t.Errorf("expected encryptionKeyPem omitted, got %v", body["encryptionKeyPem"])
+	}
+	jwk, ok := body["encryptionKeyJwk"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected encryptionKeyJwk object, got %v", body["encryptionKeyJwk"])
+	}
+	if jwk["kty"] != "RSA" || jwk["alg"] != "RSA-OAEP-256" || jwk["use"] != "enc" || jwk["e"] != "AQAB" {
+		t.Errorf("unexpected JWK members: %v", jwk)
+	}
+	n, err := base64.RawURLEncoding.DecodeString(jwk["n"].(string))
+	if err != nil || new(big.Int).SetBytes(n).Cmp(key.PublicKey.N) != 0 {
+		t.Errorf("JWK modulus does not match the public key")
+	}
+}
+
+func TestCreatePinsPersonaAPIVersion(t *testing.T) {
+	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, createRelayBody)
+	})
+
+	if _, err := m.client().Relays.Create(context.Background(), testClaimType, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := m.calls()[0].Header.Get("Persona-Version"); got != "2026-09-29" {
+		t.Fatalf("expected Persona-Version 2026-09-29, got %q", got)
 	}
 }
 
@@ -147,7 +176,7 @@ func TestCreateBubblesUpPersonaErrors(t *testing.T) {
 				writeError(w, tc.status, tc.title)
 			})
 
-			_, err := m.client().Relays.Create(context.Background(), defaultCreateParams())
+			_, err := m.client().Relays.Create(context.Background(), testClaimType, nil)
 			assertPersonaError(t, err, tc.status, tc.title)
 		})
 	}
@@ -184,7 +213,7 @@ func TestIssuePrivacyPassChallengeErrors(t *testing.T) {
 			m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 				writeError(w, tc.status, tc.title)
 			})
-			_, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+			_, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 			assertPersonaError(t, err, tc.status, tc.title)
 		})
 	}
@@ -208,7 +237,7 @@ func TestIssuePrivacyPassPrivacyPassesErrors(t *testing.T) {
 				}
 				writeError(w, tc.status, tc.title)
 			})
-			_, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+			_, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 			assertPersonaError(t, err, tc.status, tc.title)
 		})
 	}
@@ -216,7 +245,7 @@ func TestIssuePrivacyPassPrivacyPassesErrors(t *testing.T) {
 
 func TestIssuePrivacyPassReturnsToken(t *testing.T) {
 	m := newMockPersona(t, issuanceHandler(t))
-	res, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+	res, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +256,7 @@ func TestIssuePrivacyPassReturnsToken(t *testing.T) {
 
 func TestIssuePrivacyPassChallengeCallShape(t *testing.T) {
 	m := newMockPersona(t, issuanceHandler(t))
-	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"}); err != nil {
+	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -246,6 +275,9 @@ func TestIssuePrivacyPassChallengeCallShape(t *testing.T) {
 	if auth := challenge.Header.Get("Authorization"); auth != "" {
 		t.Errorf("expected no auth header on challenge, got %q", auth)
 	}
+	if got := challenge.Header.Get("Persona-Version"); got != personaAPIVersion {
+		t.Errorf("expected Persona-Version %q on challenge, got %q", personaAPIVersion, got)
+	}
 	if v, ok := body["sandbox"]; ok {
 		t.Errorf("expected sandbox omitted from challenge body, got %v", v)
 	}
@@ -254,8 +286,7 @@ func TestIssuePrivacyPassChallengeCallShape(t *testing.T) {
 func TestIssuePrivacyPassEnablesSandboxForSandboxAPIKey(t *testing.T) {
 	m := newMockPersona(t, issuanceHandler(t))
 	client := New(Options{APIKey: testSandboxAPIKey, BaseURL: m.server.URL})
-	params := IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"}
-	if _, err := client.Relays.IssuePrivacyPass(context.Background(), params); err != nil {
+	if _, err := client.Relays.IssuePrivacyPass(context.Background(), testClaimType); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -273,7 +304,7 @@ func TestIssuePrivacyPassEnablesSandboxForSandboxAPIKey(t *testing.T) {
 
 func TestIssuePrivacyPassPrivacyPassesAuth(t *testing.T) {
 	m := newMockPersona(t, issuanceHandler(t))
-	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"}); err != nil {
+	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -286,6 +317,9 @@ func TestIssuePrivacyPassPrivacyPassesAuth(t *testing.T) {
 	}
 	if got := call.Header.Get("Persona-Relay-Secret"); got != "" {
 		t.Errorf("expected no relay secret header, got %q", got)
+	}
+	if got := call.Header.Get("Persona-Version"); got != personaAPIVersion {
+		t.Errorf("expected Persona-Version %q on privacy-passes, got %q", personaAPIVersion, got)
 	}
 	var body map[string]any
 	_ = json.Unmarshal(call.Body, &body)
@@ -316,14 +350,14 @@ func challengeOnlyHandler(t *testing.T, challengeB64 string) func(m *mockPersona
 func TestIssuePrivacyPassRejectsMissingMac(t *testing.T) {
 	challenge := base64.RawURLEncoding.EncodeToString([]byte(`{"nonce":"x"}`))
 	m := newMockPersona(t, challengeOnlyHandler(t, challenge))
-	_, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+	_, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 	assertPersonaError(t, err, int(StatusBadGateway), "Challenge missing mac")
 }
 
 func TestIssuePrivacyPassRejectsNonStringMac(t *testing.T) {
 	challenge := base64.RawURLEncoding.EncodeToString([]byte(`{"mac":123}`))
 	m := newMockPersona(t, challengeOnlyHandler(t, challenge))
-	_, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+	_, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 	assertPersonaError(t, err, int(StatusBadGateway), "Failed to parse challenge")
 }
 
@@ -344,7 +378,7 @@ func TestIssuePrivacyPassEchoesFullChallenge(t *testing.T) {
 		}
 	})
 
-	res, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"})
+	res, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +400,7 @@ func TestIssuePrivacyPassEchoesFullChallenge(t *testing.T) {
 
 func TestIssuePrivacyPassMakesTwoCalls(t *testing.T) {
 	m := newMockPersona(t, issuanceHandler(t))
-	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), IssuePrivacyPassParams{ClaimType: "age_over18_united_kingdom"}); err != nil {
+	if _, err := m.client().Relays.IssuePrivacyPass(context.Background(), testClaimType); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n := len(m.calls()); n != 2 {
@@ -378,16 +412,10 @@ func TestIssuePrivacyPassMakesTwoCalls(t *testing.T) {
 
 var claimPayload = `{"age_over_18":true,"country":"GB"}`
 
-func defaultGenerateParams() GenerateClaimParams {
-	return GenerateClaimParams{
-		PrivacyPassToken: base64.RawURLEncoding.EncodeToString([]byte(`{"token_nonce":"abc","signature":"def","key_id":"ghi"}`)),
-		RelayToken:       testRelayToken,
-		RelaySecret:      testRelaySecret,
-	}
-}
+var testPrivacyPassToken = base64.RawURLEncoding.EncodeToString([]byte(`{"token_nonce":"abc","signature":"def","key_id":"ghi"}`))
 
 func redemptionBody() map[string]any {
-	return map[string]any{"claim-payload": claimPayload, "token-consumed": true}
+	return map[string]any{"claim-payload": claimPayload, "claim-payload-encryption": "none", "token-consumed": true}
 }
 
 func TestGenerateClaimErrors(t *testing.T) {
@@ -400,7 +428,7 @@ func TestGenerateClaimErrors(t *testing.T) {
 			m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 				writeError(w, tc.status, tc.title)
 			})
-			_, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams())
+			_, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret)
 			assertPersonaError(t, err, tc.status, tc.title)
 		})
 	}
@@ -410,12 +438,15 @@ func TestGenerateClaimReturnsClaim(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, redemptionBody())
 	})
-	res, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams())
+	res, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.ClaimPayload != claimPayload || !res.TokenConsumed {
 		t.Fatalf("unexpected response: %+v", res)
+	}
+	if got := m.calls()[0].Header.Get("Persona-Version"); got != personaAPIVersion {
+		t.Fatalf("expected Persona-Version %q on generate-claim, got %q", personaAPIVersion, got)
 	}
 }
 
@@ -423,12 +454,11 @@ func TestGenerateClaimPrivateTokenAuth(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, redemptionBody())
 	})
-	params := defaultGenerateParams()
-	if _, err := m.client().Relays.GenerateClaim(context.Background(), params); err != nil {
+	if _, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := m.calls()[0].Header.Get("Authorization")
-	if got != "PrivateToken token="+params.PrivacyPassToken {
+	if got != "PrivateToken token="+testPrivacyPassToken {
 		t.Fatalf("unexpected authorization: %q", got)
 	}
 }
@@ -439,7 +469,7 @@ func TestGenerateClaimIdempotencyKey(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, redemptionBody())
 	})
-	if _, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams()); err != nil {
+	if _, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	key := m.calls()[0].Header.Get("Idempotency-Key")
@@ -452,7 +482,7 @@ func TestGenerateClaimSingleCallOnSuccess(t *testing.T) {
 	m := newMockPersona(t, func(m *mockPersona, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, redemptionBody())
 	})
-	if _, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams()); err != nil {
+	if _, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n := len(m.calls()); n != 1 {
@@ -471,7 +501,7 @@ func TestGenerateClaimRetriesAndSucceeds(t *testing.T) {
 		}
 		writeJSON(w, redemptionBody())
 	})
-	res, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams())
+	res, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -493,7 +523,7 @@ func TestGenerateClaimSameIdempotencyKeyAcrossRetries(t *testing.T) {
 		}
 		writeJSON(w, redemptionBody())
 	})
-	if _, err := m.client().Relays.GenerateClaim(context.Background(), defaultGenerateParams()); err != nil {
+	if _, err := m.client().Relays.GenerateClaim(context.Background(), testPrivacyPassToken, testRelayToken, testRelaySecret); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	seen := m.calls()

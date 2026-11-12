@@ -3,8 +3,10 @@ package persona
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 
 	"github.com/cloudflare/circl/blindsign/blindrsa"
 )
@@ -15,29 +17,42 @@ type Relays struct {
 	api *personaAPI
 }
 
-type CreateRelayParams struct {
-	ClaimType        string
-	EncryptionKeyPEM *string
+// EncryptionJWK is an RSA public key in JWK form. Persona requires Alg "RSA-OAEP-256".
+type EncryptionJWK struct {
+	Kty    string   `json:"kty"`
+	N      string   `json:"n"`
+	E      string   `json:"e"`
+	Alg    string   `json:"alg"`
+	Use    string   `json:"use,omitempty"`
+	KeyOps []string `json:"key_ops,omitempty"`
+	Kid    string   `json:"kid,omitempty"`
 }
 
-type CreateRelayResponse struct {
+// NewEncryptionJWK builds the public JWK Persona encrypts claim payloads to.
+func NewEncryptionJWK(publicKey *rsa.PublicKey) *EncryptionJWK {
+	return &EncryptionJWK{
+		Kty: "RSA",
+		N:   base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes()),
+		E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes()),
+		Alg: "RSA-OAEP-256",
+		Use: "enc",
+	}
+}
+
+// Relay identifies a relay session.
+type Relay struct {
 	RelayToken              string
 	RelaySecret             string
 	RelaySessionAccessToken string
 }
 
-type IssuePrivacyPassParams struct {
-	ClaimType string
-}
+// RequestOption configures a single Relays call.
+type RequestOption func(*requestOptions)
+
+type requestOptions struct{}
 
 type IssuePrivacyPassResponse struct {
 	PrivacyPassToken string
-}
-
-type GenerateClaimParams struct {
-	PrivacyPassToken string
-	RelayToken       string
-	RelaySecret      string
 }
 
 type GenerateClaimResponse struct {
@@ -60,12 +75,14 @@ type tokenPayload struct {
 	Challenge  json.RawMessage `json:"challenge"`
 }
 
-func (r *Relays) Create(ctx context.Context, params CreateRelayParams) (*CreateRelayResponse, error) {
-	resp, err := r.api.createRelay(ctx, params.ClaimType, params.EncryptionKeyPEM)
+// Create starts a relay session for claimType. A non-nil encryptionKeyJWK returns claim payloads as
+// compact JWEs (RSA-OAEP-256 + A256GCM); nil opts out of encryption.
+func (r *Relays) Create(ctx context.Context, claimType string, encryptionKeyJWK *EncryptionJWK, opts ...RequestOption) (*Relay, error) {
+	resp, err := r.api.createRelay(ctx, claimType, encryptionKeyJWK)
 	if err != nil {
 		return nil, err
 	}
-	return &CreateRelayResponse{
+	return &Relay{
 		RelayToken:              resp.RelayToken,
 		RelaySecret:             resp.RelaySecret,
 		RelaySessionAccessToken: resp.RelaySessionAccessToken,
@@ -79,9 +96,9 @@ func (r *Relays) Create(ctx context.Context, params CreateRelayParams) (*CreateR
 //  3. Blind the token input with Persona's public key.
 //  4. Submit the blinded token for blind signing.
 //  5. Unblind the signature and assemble the PrivateToken.
-func (r *Relays) IssuePrivacyPass(ctx context.Context, params IssuePrivacyPassParams) (*IssuePrivacyPassResponse, error) {
+func (r *Relays) IssuePrivacyPass(ctx context.Context, claimType string, opts ...RequestOption) (*IssuePrivacyPassResponse, error) {
 	// Step 1: Fetch the challenge from the dedicated challenge endpoint.
-	challengeResp, err := r.api.getChallenge(ctx, params.ClaimType)
+	challengeResp, err := r.api.getChallenge(ctx, claimType)
 	if err != nil {
 		return nil, err
 	}
@@ -158,8 +175,8 @@ func (r *Relays) IssuePrivacyPass(ctx context.Context, params IssuePrivacyPassPa
 	}, nil
 }
 
-func (r *Relays) GenerateClaim(ctx context.Context, params GenerateClaimParams) (*GenerateClaimResponse, error) {
-	resp, err := r.api.redeemRelay(ctx, params.RelayToken, params.PrivacyPassToken, params.RelaySecret)
+func (r *Relays) GenerateClaim(ctx context.Context, privacyPassToken, relayToken, relaySecret string, opts ...RequestOption) (*GenerateClaimResponse, error) {
+	resp, err := r.api.redeemRelay(ctx, relayToken, privacyPassToken, relaySecret)
 	if err != nil {
 		return nil, err
 	}

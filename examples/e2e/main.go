@@ -63,9 +63,7 @@ func main() {
 	ctx := context.Background()
 
 	// 1. Create a relay session.
-	relay, err := client.Relays.Create(ctx, persona.CreateRelayParams{
-		ClaimType: claimType,
-	})
+	relay, err := client.Relays.Create(ctx, claimType, nil)
 	if err != nil {
 		log.Fatalf("create: %v", err)
 	}
@@ -88,9 +86,7 @@ func main() {
 	fmt.Println()
 
 	// 3. Issue a Privacy Pass token via the blind RSA flow.
-	issued, err := client.Relays.IssuePrivacyPass(ctx, persona.IssuePrivacyPassParams{
-		ClaimType: claimType,
-	})
+	issued, err := client.Relays.IssuePrivacyPass(ctx, claimType)
 	if err != nil {
 		log.Fatalf("issue: %v", err)
 	}
@@ -99,11 +95,7 @@ func main() {
 	fmt.Println()
 
 	// 4. Redeem the token for a claim.
-	claim, err := client.Relays.GenerateClaim(ctx, persona.GenerateClaimParams{
-		PrivacyPassToken: issued.PrivacyPassToken,
-		RelayToken:       relay.RelayToken,
-		RelaySecret:      relay.RelaySecret,
-	})
+	claim, err := client.Relays.GenerateClaim(ctx, issued.PrivacyPassToken, relay.RelayToken, relay.RelaySecret)
 	if err != nil {
 		log.Fatalf("generateClaim: %v", err)
 	}
